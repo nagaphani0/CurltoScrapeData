@@ -1,0 +1,5 @@
+{
+  "name": "Curl2Py - Intelligent Converter & Filter",
+  "description": "A sophisticated tool that converts cURL commands into optimized Python code using the requests library, featuring AI-powered JSON field extraction and filtering logic.",
+  "requestFramePermissions": []
+}
