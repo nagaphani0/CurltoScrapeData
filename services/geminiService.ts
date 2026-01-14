@@ -4,21 +4,32 @@ import { ConversionResponse } from "../types";
 
 const getAIClient = () => new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
 
-export const analyzeCurlSchema = async (curlCommand: string): Promise<string[]> => {
+export interface AnalysisResult {
+  responseFields: string[];
+  volatileInputs: Array<{
+    name: string;
+    currentValue: string;
+    type: 'header' | 'query' | 'body';
+    description: string;
+  }>;
+}
+
+export const analyzeCurlSchema = async (curlCommand: string): Promise<AnalysisResult> => {
   const ai = getAIClient();
   
   const prompt = `
-    Analyze the following cURL command and predict the likely JSON response schema.
-    Return a flat list of strings representing the most useful field names (use dot notation for nested fields, e.g., 'id', 'user.name', 'meta.count').
+    Analyze the following cURL command. 
+    1. Predict the likely JSON response schema (useful field names in dot notation).
+    2. Identify "Volatile Inputs": These are parts of the request that are likely to expire or need changing tomorrow (e.g., Authorization tokens, API keys, session cookies, timestamps, or nonce values).
     
     cURL Command:
     \`\`\`bash
     ${curlCommand}
     \`\`\`
     
-    If the API is well-known (like GitHub, Stripe, generic dummy APIs), use your knowledge to list actual fields. 
-    If unknown, infer probable fields based on the resource names in the URL or body.
-    Provide at least 5-10 likely fields.
+    Return a JSON object with:
+    - 'responseFields': array of predicted response field names.
+    - 'volatileInputs': array of objects { name, currentValue, type, description } for things like 'Authorization', 'Cookie', etc.
   `;
 
   const response = await ai.models.generateContent({
@@ -29,47 +40,61 @@ export const analyzeCurlSchema = async (curlCommand: string): Promise<string[]> 
       responseSchema: {
         type: Type.OBJECT,
         properties: {
-          fields: {
+          responseFields: {
             type: Type.ARRAY,
-            items: { type: Type.STRING },
-            description: "List of predicted JSON fields available in the response."
+            items: { type: Type.STRING }
+          },
+          volatileInputs: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                name: { type: Type.STRING },
+                currentValue: { type: Type.STRING },
+                type: { type: Type.STRING, enum: ['header', 'query', 'body'] },
+                description: { type: Type.STRING }
+              },
+              required: ["name", "currentValue", "type", "description"]
+            }
           }
         },
-        required: ["fields"]
+        required: ["responseFields", "volatileInputs"]
       }
     }
   });
 
-  const result = JSON.parse(response.text);
-  return result.fields || [];
+  return JSON.parse(response.text);
 };
 
 export const convertCurlToPython = async (
   curlCommand: string,
-  selectedFields: string[]
+  selectedFields: string[],
+  volatileInputs: any[]
 ): Promise<ConversionResponse> => {
   const ai = getAIClient();
   
   const fieldsDescription = selectedFields.length > 0 
     ? selectedFields.join(", ") 
-    : "All fields (no filtering)";
+    : "All fields";
 
   const prompt = `
-    Convert the following cURL command into a clean, professional Python script using the 'requests' library.
+    Convert this cURL to a production-ready Python script using 'requests'.
     
-    cURL Command:
+    cURL:
     \`\`\`bash
     ${curlCommand}
     \`\`\`
     
-    The user explicitly wants to extract ONLY these specific fields from the JSON response: 
-    [ ${fieldsDescription} ]
+    Selected Response Extraction: [ ${fieldsDescription} ]
     
-    Requirements:
-    1. Include error handling for the network request.
-    2. Add specific logic to filter the JSON response. Create a new dictionary/object containing ONLY the selected fields.
-    3. If nested fields were selected (e.g., 'user.profile.name'), ensure the Python logic traverses the dictionary safely (using .get() or try/except) to avoid KeyErrors if the field is missing.
-    4. Provide a sample 'mock' JSON response that demonstrates exactly what the *filtered* output will look like based on the user's selection.
+    CRITICAL INSTRUCTION:
+    The user needs to run this script repeatedly, but some fields (tokens/headers) might expire.
+    1. Create a "CONFIGURATION" section at the top of the script using variables or a dictionary.
+    2. Put all identified volatile inputs (${JSON.stringify(volatileInputs)}) into this configuration section.
+    3. Use these variables in the actual request call.
+    4. Ensure the response is handled as JSON.
+    5. Filter the response to include ONLY the selected fields.
+    6. Include a 'mockResponse' that shows the filtered output.
   `;
 
   const response = await ai.models.generateContent({
@@ -80,24 +105,14 @@ export const convertCurlToPython = async (
       responseSchema: {
         type: Type.OBJECT,
         properties: {
-          pythonCode: {
-            type: Type.STRING,
-            description: "The complete Python script including specific filtering logic for the selected fields.",
-          },
-          explanation: {
-            type: Type.STRING,
-            description: "A brief explanation of the code, specifically mentioning how the filtering works.",
-          },
-          mockResponse: {
-            type: Type.STRING,
-            description: "A stringified JSON example of the output containing only the selected fields.",
-          },
+          pythonCode: { type: Type.STRING },
+          explanation: { type: Type.STRING },
+          mockResponse: { type: Type.STRING },
         },
         required: ["pythonCode", "explanation", "mockResponse"],
       },
     },
   });
 
-  const result = JSON.parse(response.text);
-  return result;
+  return JSON.parse(response.text);
 };

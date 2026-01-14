@@ -1,5 +1,5 @@
 
-import React, { useState, useCallback } from 'react';
+import React, { useState } from 'react';
 import { AppStatus, ConversionResponse } from './types';
 import { convertCurlToPython, analyzeCurlSchema } from './services/geminiService';
 
@@ -7,12 +7,12 @@ const App: React.FC = () => {
   const [curlInput, setCurlInput] = useState('');
   const [status, setStatus] = useState<AppStatus>(AppStatus.IDLE);
   const [availableFields, setAvailableFields] = useState<string[]>([]);
+  const [volatileInputs, setVolatileInputs] = useState<any[]>([]);
   const [selectedFields, setSelectedFields] = useState<Set<string>>(new Set());
   const [result, setResult] = useState<ConversionResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [customField, setCustomField] = useState('');
 
-  // Step 1: Analyze the cURL to get potential fields
   const handleAnalyze = async () => {
     if (!curlInput.trim()) return;
 
@@ -21,10 +21,11 @@ const App: React.FC = () => {
     setResult(null);
 
     try {
-      const fields = await analyzeCurlSchema(curlInput);
-      setAvailableFields(fields);
-      // Auto-select the first few fields as a helpful default
-      setSelectedFields(new Set(fields.slice(0, 3)));
+      const analysis = await analyzeCurlSchema(curlInput);
+      setAvailableFields(analysis.responseFields);
+      setVolatileInputs(analysis.volatileInputs);
+      // Auto-select first few fields
+      setSelectedFields(new Set(analysis.responseFields.slice(0, 3)));
       setStatus(AppStatus.AWAITING_SELECTION);
     } catch (err: any) {
       console.error(err);
@@ -33,13 +34,16 @@ const App: React.FC = () => {
     }
   };
 
-  // Step 2: Generate the code based on selected fields
   const handleGenerate = async () => {
     setStatus(AppStatus.GENERATING);
     setError(null);
 
     try {
-      const data = await convertCurlToPython(curlInput, Array.from(selectedFields));
+      const data = await convertCurlToPython(
+        curlInput, 
+        Array.from(selectedFields),
+        volatileInputs
+      );
       setResult(data);
       setStatus(AppStatus.SUCCESS);
     } catch (err: any) {
@@ -52,6 +56,7 @@ const App: React.FC = () => {
   const handleReset = () => {
     setStatus(AppStatus.IDLE);
     setAvailableFields([]);
+    setVolatileInputs([]);
     setSelectedFields(new Set());
     setResult(null);
     setError(null);
@@ -59,270 +64,171 @@ const App: React.FC = () => {
 
   const toggleField = (field: string) => {
     const newSelected = new Set(selectedFields);
-    if (newSelected.has(field)) {
-      newSelected.delete(field);
-    } else {
-      newSelected.add(field);
-    }
+    if (newSelected.has(field)) newSelected.delete(field);
+    else newSelected.add(field);
     setSelectedFields(newSelected);
   };
 
-  const addCustomField = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (customField.trim()) {
-      const newField = customField.trim();
-      setAvailableFields([...availableFields, newField]);
-      toggleField(newField);
-      setCustomField('');
-    }
-  };
-
   const handleExample = () => {
-    setCurlInput(`curl -X GET "https://api.github.com/users/octocat" -H "accept: application/json"`);
+    setCurlInput(`curl -X GET "https://api.github.com/user" -H "Authorization: Bearer YOUR_EXPIRING_TOKEN" -H "X-GitHub-Api-Version: 2022-11-28"`);
     setStatus(AppStatus.IDLE);
     setError(null);
   };
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
-    // Could add toast here
   };
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-12">
-      {/* Header */}
+    <div className="max-w-7xl mx-auto px-4 py-12">
       <header className="mb-12 text-center">
         <div className="flex items-center justify-center mb-4">
-          <div className="bg-blue-600 text-white p-3 rounded-2xl shadow-lg mr-4">
+          <div className="bg-indigo-600 text-white p-3 rounded-2xl shadow-lg mr-4">
             <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
             </svg>
           </div>
-          <h1 className="text-4xl font-extrabold text-slate-900 tracking-tight">Curl2Py</h1>
+          <h1 className="text-4xl font-extrabold text-slate-900 tracking-tight">Curl2Py <span className="text-indigo-600">Pro</span></h1>
         </div>
         <p className="text-lg text-slate-600 max-w-2xl mx-auto">
-          Transform raw cURL commands into optimized Python scripts with intelligent field filtering.
+          Convert cURL to reusable Python. Automatically detects tokens and headers that expire tomorrow.
         </p>
       </header>
 
       <main className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        {/* Left Column: Input & Configuration */}
+        {/* Left Column */}
         <section className="space-y-6">
-          
-          {/* Input Box */}
-          <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 transition-all">
+          <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200">
             <div className="flex justify-between items-center mb-4">
-              <label className="block text-sm font-semibold text-slate-700 uppercase tracking-wider">
-                1. Paste cURL Command
-              </label>
-              {status === AppStatus.IDLE && (
-                <button 
-                  onClick={handleExample}
-                  className="text-xs font-medium text-blue-600 hover:text-blue-700 transition-colors"
-                >
-                  Try an example
-                </button>
-              )}
-              {status !== AppStatus.IDLE && status !== AppStatus.ANALYZING && (
-                 <button 
-                 onClick={handleReset}
-                 className="text-xs font-medium text-slate-500 hover:text-slate-700 transition-colors underline"
-               >
-                 Start Over
-               </button>
-              )}
+              <label className="text-sm font-bold text-slate-700 uppercase tracking-wider">1. Input cURL</label>
+              <button onClick={handleExample} className="text-xs font-semibold text-indigo-600 hover:underline">Try Token Example</button>
             </div>
-            
             <textarea
               value={curlInput}
               onChange={(e) => setCurlInput(e.target.value)}
-              disabled={status !== AppStatus.IDLE && status !== AppStatus.ERROR}
-              placeholder="curl -X GET 'https://api.example.com/data'..."
-              className={`w-full h-32 p-4 code-font text-sm bg-slate-50 border rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all resize-none ${
-                status !== AppStatus.IDLE && status !== AppStatus.ERROR ? 'opacity-75 border-slate-100' : 'border-slate-200'
-              }`}
+              placeholder="Paste your curl command here..."
+              className="w-full h-40 p-4 code-font text-sm bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all resize-none"
             />
-
-            {status === AppStatus.IDLE || status === AppStatus.ERROR || status === AppStatus.ANALYZING ? (
-              <button
-                onClick={handleAnalyze}
-                disabled={status === AppStatus.ANALYZING || !curlInput}
-                className={`w-full mt-4 py-3 rounded-xl font-bold text-white shadow-md transition-all ${
-                  status === AppStatus.ANALYZING || !curlInput
-                    ? 'bg-slate-400 cursor-not-allowed'
-                    : 'bg-blue-600 hover:bg-blue-700 hover:-translate-y-0.5'
-                }`}
-              >
-                {status === AppStatus.ANALYZING ? 'Analyzing API Schema...' : 'Analyze & Detect Fields'}
-              </button>
-            ) : null}
+            <button
+              onClick={handleAnalyze}
+              disabled={!curlInput || status === AppStatus.ANALYZING}
+              className="w-full mt-4 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl transition-all shadow-md disabled:bg-slate-300"
+            >
+              {status === AppStatus.ANALYZING ? 'Detecting Volatile Fields...' : 'Analyze Command'}
+            </button>
           </div>
 
-          {/* Field Selection (Visible after Analysis) */}
-          {(status === AppStatus.AWAITING_SELECTION || status === AppStatus.GENERATING || status === AppStatus.SUCCESS) && (
-            <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 animate-[fadeIn_0.5s_ease-out]">
-              <div className="flex justify-between items-end mb-4">
-                <label className="block text-sm font-semibold text-slate-700 uppercase tracking-wider">
-                  2. Select Desired Fields
-                </label>
-                <span className="text-xs text-slate-500 bg-slate-100 px-2 py-1 rounded-full">
-                  {selectedFields.size} selected
-                </span>
-              </div>
+          {(status === AppStatus.AWAITING_SELECTION || status === AppStatus.SUCCESS) && (
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 animate-in fade-in slide-in-from-top-4">
+              {/* Volatile Fields Display */}
+              {volatileInputs.length > 0 && (
+                <div className="mb-8 p-4 bg-amber-50 border border-amber-100 rounded-2xl">
+                  <h3 className="text-amber-800 text-xs font-black uppercase tracking-widest mb-3 flex items-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                    </svg>
+                    Detected Expiring Inputs
+                  </h3>
+                  <div className="space-y-2">
+                    {volatileInputs.map((input, idx) => (
+                      <div key={idx} className="flex items-center justify-between bg-white/60 p-2 rounded-lg border border-amber-200/50">
+                        <div>
+                          <span className="text-xs font-bold text-slate-700">{input.name}</span>
+                          <p className="text-[10px] text-amber-600 font-medium">{input.description}</p>
+                        </div>
+                        <span className="text-[10px] font-black px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded uppercase">{input.type}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="mt-3 text-[10px] text-amber-700 italic">
+                    These will be extracted into a <strong>Configuration</strong> block in your Python code for easy updates tomorrow.
+                  </p>
+                </div>
+              )}
 
-              <div className="mb-4 flex flex-wrap gap-2 max-h-48 overflow-y-auto p-2 border border-slate-100 rounded-xl bg-slate-50 custom-scrollbar">
-                {availableFields.map((field) => (
+              <label className="text-sm font-bold text-slate-700 uppercase tracking-wider block mb-4">2. Select Response Fields</label>
+              <div className="flex flex-wrap gap-2 mb-6">
+                {availableFields.map(field => (
                   <button
                     key={field}
                     onClick={() => toggleField(field)}
-                    className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all border ${
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all border ${
                       selectedFields.has(field)
-                        ? 'bg-blue-100 text-blue-700 border-blue-200 shadow-sm ring-1 ring-blue-300'
-                        : 'bg-white text-slate-600 border-slate-200 hover:border-blue-300 hover:text-blue-600'
+                        ? 'bg-indigo-600 border-indigo-600 text-white shadow-md'
+                        : 'bg-slate-50 border-slate-200 text-slate-600 hover:border-indigo-400'
                     }`}
                   >
                     {field}
                   </button>
                 ))}
-                {availableFields.length === 0 && (
-                  <p className="text-slate-400 text-sm italic p-2">No fields automatically detected. Add one below.</p>
-                )}
               </div>
-
-              {/* Add Custom Field */}
-              <form onSubmit={addCustomField} className="flex gap-2 mb-6">
-                <input
-                  type="text"
-                  value={customField}
-                  onChange={(e) => setCustomField(e.target.value)}
-                  placeholder="Add custom field (e.g. data.items)"
-                  className="flex-grow px-4 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:border-blue-500 bg-slate-50"
-                />
-                <button
-                  type="submit"
-                  disabled={!customField.trim()}
-                  className="px-4 py-2 bg-slate-200 text-slate-700 text-sm font-semibold rounded-lg hover:bg-slate-300 disabled:opacity-50"
-                >
-                  Add
-                </button>
-              </form>
 
               <button
                 onClick={handleGenerate}
                 disabled={status === AppStatus.GENERATING}
-                className={`w-full py-4 rounded-xl font-bold text-white shadow-lg shadow-blue-200 transition-all transform active:scale-[0.98] ${
-                  status === AppStatus.GENERATING
-                    ? 'bg-slate-400 cursor-not-allowed'
-                    : 'bg-emerald-600 hover:bg-emerald-700 hover:-translate-y-0.5'
-                }`}
+                className="w-full py-4 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl transition-all shadow-lg shadow-emerald-100 disabled:bg-slate-300"
               >
-                {status === AppStatus.GENERATING ? (
-                  <span className="flex items-center justify-center">
-                    <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                    Generating Code...
-                  </span>
-                ) : 'Generate Python Script'}
+                {status === AppStatus.GENERATING ? 'Generating Reusable Script...' : 'Convert to Reusable Python'}
               </button>
-            </div>
-          )}
-
-          {error && (
-            <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded-lg flex items-start animate-bounce-in">
-              <div className="flex-shrink-0">
-                <svg className="h-5 w-5 text-red-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
-                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
-                </svg>
-              </div>
-              <div className="ml-3">
-                <p className="text-sm text-red-700">{error}</p>
-              </div>
             </div>
           )}
         </section>
 
-        {/* Right Column: Output */}
-        <section className="bg-slate-900 rounded-3xl shadow-2xl overflow-hidden min-h-[600px] flex flex-col border border-slate-800">
+        {/* Right Column */}
+        <section className="bg-slate-900 rounded-3xl shadow-2xl overflow-hidden flex flex-col border border-slate-800">
           <div className="bg-slate-800 px-6 py-4 flex items-center justify-between border-b border-slate-700">
-            <div className="flex items-center space-x-2">
-              <div className="w-3 h-3 rounded-full bg-red-500"></div>
-              <div className="w-3 h-3 rounded-full bg-yellow-500"></div>
-              <div className="w-3 h-3 rounded-full bg-green-500"></div>
-              <span className="ml-4 text-xs font-medium text-slate-400 font-mono">
-                {result ? 'filtered_request.py' : 'terminal'}
-              </span>
+            <div className="flex items-center gap-2">
+              <div className="w-3 h-3 rounded-full bg-rose-500"></div>
+              <div className="w-3 h-3 rounded-full bg-amber-500"></div>
+              <div className="w-3 h-3 rounded-full bg-emerald-500"></div>
+              <span className="ml-4 text-[10px] font-mono text-slate-500">api_client.py</span>
             </div>
             {result && (
-              <button
-                onClick={() => copyToClipboard(result.pythonCode)}
-                className="text-slate-400 hover:text-white transition-colors p-1"
-                title="Copy code"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <button onClick={() => copyToClipboard(result.pythonCode)} className="text-slate-400 hover:text-white transition-all text-xs flex items-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
                 </svg>
+                Copy Code
               </button>
             )}
           </div>
 
-          <div className="flex-grow p-6 overflow-auto relative">
-            {/* Empty State */}
+          <div className="flex-grow p-6 overflow-auto custom-scrollbar">
             {!result && status !== AppStatus.GENERATING && (
-              <div className="h-full flex flex-col items-center justify-center text-slate-500 space-y-4">
-                {status === AppStatus.ANALYZING ? (
-                  <div className="flex flex-col items-center">
-                     <div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
-                     <p className="font-mono text-sm">Detecting JSON structure...</p>
-                  </div>
-                ) : (
-                  <>
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16 opacity-20" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                    </svg>
-                    <p className="font-medium text-sm">
-                      {status === AppStatus.AWAITING_SELECTION 
-                        ? 'Select fields on the left to generate code.' 
-                        : 'Ready to convert your command.'}
-                    </p>
-                  </>
-                )}
+              <div className="h-full flex flex-col items-center justify-center text-slate-600 text-center">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16 mb-4 opacity-10" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+                </svg>
+                <p className="text-sm font-mono italic">Awaiting analysis or generation...</p>
               </div>
             )}
 
-            {/* Generating State */}
             {status === AppStatus.GENERATING && (
-              <div className="h-full flex flex-col items-center justify-center">
-                <div className="flex space-x-2 mb-4">
-                  <div className="w-3 h-3 bg-emerald-500 rounded-full animate-bounce [animation-delay:-0.3s]"></div>
-                  <div className="w-3 h-3 bg-emerald-500 rounded-full animate-bounce [animation-delay:-0.15s]"></div>
-                  <div className="w-3 h-3 bg-emerald-500 rounded-full animate-bounce"></div>
-                </div>
-                <p className="text-slate-400 font-mono text-sm">Writing Python script...</p>
+              <div className="h-full flex flex-col items-center justify-center text-indigo-500">
+                <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin mb-4"></div>
+                <p className="text-xs font-mono">Building configuration-ready script...</p>
               </div>
             )}
 
-            {/* Success State */}
             {result && status === AppStatus.SUCCESS && (
-              <div className="space-y-8 animate-[fadeIn_0.5s_ease-out]">
+              <div className="space-y-8 animate-in fade-in duration-500">
                 <div>
-                  <h3 className="text-blue-400 text-xs font-bold uppercase tracking-widest mb-3">Python Code</h3>
-                  <pre className="code-font text-sm text-blue-50 whitespace-pre-wrap">
+                  <h3 className="text-indigo-400 text-[10px] font-black uppercase tracking-widest mb-4 border-l-2 border-indigo-500 pl-2">Reusable Python Code</h3>
+                  <pre className="code-font text-sm text-indigo-50/90 whitespace-pre-wrap selection:bg-indigo-500/30">
                     <code>{result.pythonCode}</code>
                   </pre>
                 </div>
 
                 <div className="pt-6 border-t border-slate-800">
-                  <h3 className="text-emerald-400 text-xs font-bold uppercase tracking-widest mb-3">Mock Response (Filtered)</h3>
-                  <pre className="code-font text-sm text-slate-400 bg-slate-950 p-4 rounded-xl border border-slate-800 overflow-x-auto">
+                  <h3 className="text-emerald-400 text-[10px] font-black uppercase tracking-widest mb-4 border-l-2 border-emerald-500 pl-2">Filtered JSON Response</h3>
+                  <pre className="code-font text-xs text-slate-400 bg-black/40 p-4 rounded-xl border border-slate-800">
                     <code>{JSON.stringify(JSON.parse(result.mockResponse), null, 2)}</code>
                   </pre>
                 </div>
 
                 <div className="pt-6 border-t border-slate-800">
-                  <h3 className="text-slate-400 text-xs font-bold uppercase tracking-widest mb-2">AI Explanation</h3>
-                  <p className="text-sm text-slate-500 leading-relaxed">
+                  <h3 className="text-slate-500 text-[10px] font-black uppercase tracking-widest mb-2">Instructions</h3>
+                  <p className="text-sm text-slate-500 leading-relaxed italic">
                     {result.explanation}
                   </p>
                 </div>
@@ -332,8 +238,8 @@ const App: React.FC = () => {
         </section>
       </main>
 
-      <footer className="mt-24 pt-8 border-t border-slate-200 text-center text-slate-400 text-sm">
-        <p>Built with Gemini 3 Pro & Flash • React 19</p>
+      <footer className="mt-20 text-center text-slate-400 text-[10px] uppercase tracking-widest font-bold">
+        Built with Gemini 3 Pro & Flash • Reusable Code Engine
       </footer>
     </div>
   );
